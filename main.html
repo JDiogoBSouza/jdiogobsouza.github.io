@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Stress Test: Content Visibility & Metrics</title>
+    <style>
+        #container {
+            width: 300px;
+            height: 200px;
+            border: 1px solid #ccc;
+            overflow: auto;
+            content-visibility: auto;
+            margin-bottom: 10px;
+        }
+
+        .child {
+            height: 20px;
+            border-bottom: 1px solid #eee;
+        }
+
+        #log {
+            margin-top: 10px;
+            font-family: monospace;
+        }
+
+        #metrics {
+            margin-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h2>Stress Test: Content-Visibility, Overflow e Reflow com Métricas</h2>
+
+    <div id="container">
+        <!-- Muitos filhos adicionados via JS -->
+    </div>
+
+    <button id="startBtn">Iniciar Loop de Stress</button>
+
+    <div id="log"></div>
+
+    <canvas id="chart" width="600" height="200"></canvas>
+
+    <script>
+        const container = document.getElementById('container');
+        const log = document.getElementById('log');
+        const canvas = document.getElementById('chart');
+        const ctx = canvas.getContext('2d');
+
+        const maxDataPoints = 100;
+        const times = [];
+        const elements = [];
+
+        // Criar muitos filhos inicialmente
+        for (let i = 0; i < 100; i++) {
+            const div = document.createElement('div');
+            div.className = 'child';
+            div.textContent = 'Item ' + (i + 1);
+            container.appendChild(div);
+        }
+
+        let toggle = false;
+        let running = false;
+
+        function drawChart() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Eixos
+            ctx.beginPath();
+            ctx.moveTo(30, 0);
+            ctx.lineTo(30, canvas.height);
+            ctx.lineTo(canvas.width, canvas.height);
+            ctx.strokeStyle = '#000';
+            ctx.stroke();
+
+            // Plotar tempos
+            ctx.strokeStyle = 'red';
+            ctx.beginPath();
+            times.forEach((t, i) => {
+                const x = 30 + (i * (canvas.width - 30) / maxDataPoints);
+                const y = canvas.height - t;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // Plotar número de elementos
+            ctx.strokeStyle = 'blue';
+            ctx.beginPath();
+            elements.forEach((e, i) => {
+                const x = 30 + (i * (canvas.width - 30) / maxDataPoints);
+                const y = canvas.height - (e / 2); // escalar
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            });
+            ctx.stroke();
+
+            // Legenda
+            ctx.fillStyle = 'red';
+            ctx.fillText('Tempo por iteração (ms)', 40, 10);
+            ctx.fillStyle = 'blue';
+            ctx.fillText('Nº de elementos (/2)', 40, 25);
+        }
+
+        function stressLoop(iteration = 0) {
+            if (!running) return;
+
+            const start = performance.now();
+
+            // Alterar dinamicamente content-visibility e overflow
+            container.style.contentVisibility = toggle ? 'auto' : 'visible';
+            container.style.overflow = toggle ? 'auto' : 'hidden';
+            toggle = !toggle;
+
+            // Forçar múltiplos reflows simultâneos
+            const reflow1 = container.offsetHeight;
+            const reflow2 = container.offsetWidth;
+            const reflow3 = container.scrollTop;
+
+            // Modificar/remover elementos durante recalculo
+            if (container.children.length > 0 && Math.random() > 0.5) {
+                container.removeChild(container.lastChild);
+            } else {
+                const div = document.createElement('div');
+                div.className = 'child';
+                div.textContent = 'Novo Item ' + iteration;
+                container.appendChild(div);
+            }
+
+            const end = performance.now();
+            const duration = end - start;
+
+            if (times.length >= maxDataPoints) {
+                times.shift();
+                elements.shift();
+            }
+
+            times.push(duration);
+            elements.push(container.children.length);
+
+            log.textContent = `Iteração ${iteration}: Tempo=${duration.toFixed(2)}ms, Reflows=(${reflow1},${reflow2},${reflow3}), Filhos=${container.children.length}`;
+
+            drawChart();
+
+            setTimeout(() => stressLoop(iteration + 1), 50);
+        }
+
+        const startBtn = document.getElementById('startBtn');
+
+        startBtn.addEventListener('click', () => {
+            if (!running) {
+                running = true;
+                startBtn.textContent = 'Parar Loop de Stress';
+                stressLoop();
+            } else {
+                running = false;
+                startBtn.textContent = 'Iniciar Loop de Stress';
+            }
+        });
+    </script>
+
+</body>
+
+</html>
