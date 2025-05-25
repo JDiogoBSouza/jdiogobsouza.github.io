@@ -3,165 +3,181 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Stress Test: Content Visibility & Metrics</title>
+    <title>UaF Stress Test com Gráficos</title>
     <style>
         #container {
-            width: 300px;
-            height: 200px;
-            border: 1px solid #ccc;
+            width: 500px;
+            height: 500px;
             overflow: auto;
+            border: 1px solid black;
             content-visibility: auto;
-            margin-bottom: 10px;
+            margin-top: 20px;
         }
 
         .child {
+            width: 100%;
             height: 20px;
-            border-bottom: 1px solid #eee;
+            background: lightgray;
+            margin: 1px 0;
         }
 
-        #log {
-            margin-top: 10px;
-            font-family: monospace;
-        }
-
-        #metrics {
-            margin-top: 10px;
+        canvas {
+            max-width: 600px;
         }
     </style>
 </head>
 
 <body>
-
-    <h2>Stress Test: Content-Visibility, Overflow e Reflow com Métricas</h2>
-
-    <div id="container">
-        <!-- Muitos filhos adicionados via JS -->
+    <button onclick="startStressTest()">Start UaF Stress Test</button>
+    <div>
+        <canvas id="fpsChart"></canvas>
+        <canvas id="timeChart"></canvas>
+        <canvas id="memChart"></canvas>
     </div>
+    <div id="container"></div>
 
-    <button id="startBtn">Iniciar Loop de Stress</button>
-
-    <div id="log"></div>
-
-    <canvas id="chart" width="600" height="200"></canvas>
-
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        const container = document.getElementById('container');
-        const log = document.getElementById('log');
-        const canvas = document.getElementById('chart');
-        const ctx = canvas.getContext('2d');
+        let fpsChart, timeChart, memChart;
+        let fpsData = [], timeData = [], memData = [];
+        let lastFrameTime = performance.now();
+        let iteration = 0;
+        const maxIterations = 500;
 
-        const maxDataPoints = 100;
-        const times = [];
-        const elements = [];
-
-        // Criar muitos filhos inicialmente
-        for (let i = 0; i < 100; i++) {
-            const div = document.createElement('div');
-            div.className = 'child';
-            div.textContent = 'Item ' + (i + 1);
-            container.appendChild(div);
-        }
-
-        let toggle = false;
-        let running = false;
-
-        function drawChart() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Eixos
-            ctx.beginPath();
-            ctx.moveTo(30, 0);
-            ctx.lineTo(30, canvas.height);
-            ctx.lineTo(canvas.width, canvas.height);
-            ctx.strokeStyle = '#000';
-            ctx.stroke();
-
-            // Plotar tempos
-            ctx.strokeStyle = 'red';
-            ctx.beginPath();
-            times.forEach((t, i) => {
-                const x = 30 + (i * (canvas.width - 30) / maxDataPoints);
-                const y = canvas.height - t;
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
+        function setupCharts() {
+            fpsChart = new Chart(document.getElementById('fpsChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'FPS',
+                        data: [],
+                        borderColor: 'blue',
+                        fill: false
+                    }]
+                },
+                options: { scales: { x: { display: false } } }
             });
-            ctx.stroke();
 
-            // Plotar número de elementos
-            ctx.strokeStyle = 'blue';
-            ctx.beginPath();
-            elements.forEach((e, i) => {
-                const x = 30 + (i * (canvas.width - 30) / maxDataPoints);
-                const y = canvas.height - (e / 2); // escalar
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
+            timeChart = new Chart(document.getElementById('timeChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Tempo Iteração (ms)',
+                        data: [],
+                        borderColor: 'green',
+                        fill: false
+                    }]
+                },
+                options: { scales: { x: { display: false } } }
             });
-            ctx.stroke();
 
-            // Legenda
-            ctx.fillStyle = 'red';
-            ctx.fillText('Tempo por iteração (ms)', 40, 10);
-            ctx.fillStyle = 'blue';
-            ctx.fillText('Nº de elementos (/2)', 40, 25);
+            memChart = new Chart(document.getElementById('memChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Memória JS (MB)',
+                        data: [],
+                        borderColor: 'red',
+                        fill: false
+                    }]
+                },
+                options: { scales: { x: { display: false } } }
+            });
         }
 
-        function stressLoop(iteration = 0) {
-            if (!running) return;
+        function updateCharts(fps, iterTime, memMB) {
+            const maxPoints = 100;
 
-            const start = performance.now();
+            fpsData.push(fps);
+            timeData.push(iterTime);
+            memData.push(memMB);
 
-            // Alterar dinamicamente content-visibility e overflow
-            container.style.contentVisibility = toggle ? 'auto' : 'visible';
-            container.style.overflow = toggle ? 'auto' : 'hidden';
-            toggle = !toggle;
+            if (fpsData.length > maxPoints) fpsData.shift();
+            if (timeData.length > maxPoints) timeData.shift();
+            if (memData.length > maxPoints) memData.shift();
 
-            // Forçar múltiplos reflows simultâneos
-            const reflow1 = container.offsetHeight;
-            const reflow2 = container.offsetWidth;
-            const reflow3 = container.scrollTop;
+            fpsChart.data.labels = fpsData.map((_, i) => i);
+            timeChart.data.labels = timeData.map((_, i) => i);
+            memChart.data.labels = memData.map((_, i) => i);
 
-            // Modificar/remover elementos durante recalculo
-            if (container.children.length > 0 && Math.random() > 0.5) {
-                container.removeChild(container.lastChild);
-            } else {
-                const div = document.createElement('div');
-                div.className = 'child';
-                div.textContent = 'Novo Item ' + iteration;
-                container.appendChild(div);
-            }
+            fpsChart.data.datasets[0].data = fpsData;
+            timeChart.data.datasets[0].data = timeData;
+            memChart.data.datasets[0].data = memData;
 
-            const end = performance.now();
-            const duration = end - start;
-
-            if (times.length >= maxDataPoints) {
-                times.shift();
-                elements.shift();
-            }
-
-            times.push(duration);
-            elements.push(container.children.length);
-
-            log.textContent = `Iteração ${iteration}: Tempo=${duration.toFixed(2)}ms, Reflows=(${reflow1},${reflow2},${reflow3}), Filhos=${container.children.length}`;
-
-            drawChart();
-
-            setTimeout(() => stressLoop(iteration + 1), 50);
+            fpsChart.update();
+            timeChart.update();
+            memChart.update();
         }
 
-        const startBtn = document.getElementById('startBtn');
+        function startStressTest() {
+            const container = document.getElementById('container');
+            setupCharts();
 
-        startBtn.addEventListener('click', () => {
-            if (!running) {
-                running = true;
-                startBtn.textContent = 'Parar Loop de Stress';
-                stressLoop();
-            } else {
-                running = false;
-                startBtn.textContent = 'Iniciar Loop de Stress';
+            function mutateDOM() {
+                const start = performance.now();
+
+                for (let i = 0; i < 500; i++) {
+                    const el = document.createElement('div');
+                    el.className = 'child';
+                    el.textContent = 'Element ' + iteration + '-' + i;
+
+                    el.style.contentVisibility = (i % 2 === 0) ? 'auto' : 'visible';
+                    el.style.overflow = (i % 3 === 0) ? 'hidden' : 'auto';
+                    el.style.contain = (i % 4 === 0) ? 'paint' : 'none';
+
+                    container.appendChild(el);
+
+                    const h = el.offsetHeight;
+                    el.style.height = (h + 1) + 'px';
+
+                    if (i % 5 === 0) {
+                        container.removeChild(el);
+                    }
+                }
+
+                if (iteration % 10 === 0) {
+                    container.innerHTML = '';
+                }
+
+                let garbage = [];
+                for (let j = 0; j < 10000; j++) {
+                    garbage.push({ x: Math.random(), y: Math.random(), z: new Array(100).fill(0) });
+                }
+                garbage = null;
+
+                container.scrollTop = container.scrollHeight;
+
+                const now = performance.now();
+                const iterTime = now - start;
+
+                // FPS estimado
+                const delta = now - lastFrameTime;
+                const fps = 1000 / delta;
+                lastFrameTime = now;
+
+                // Memória JS estimada
+                let memMB = 0;
+                if (performance.memory) {
+                    memMB = (performance.memory.usedJSHeapSize / 1048576).toFixed(2);
+                }
+
+                updateCharts(fps, iterTime, memMB);
+
+                iteration++;
+
+                if (iteration < maxIterations) {
+                    requestAnimationFrame(mutateDOM);
+                } else {
+                    console.log('Stress test completed');
+                }
             }
-        });
+
+            mutateDOM();
+        }
     </script>
-
 </body>
 
 </html>
