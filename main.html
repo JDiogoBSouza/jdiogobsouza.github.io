@@ -3,181 +3,145 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>UaF Stress Test com Gráficos</title>
+    <title>UAF Detection PoC</title>
     <style>
-        #container {
-            width: 500px;
-            height: 500px;
-            overflow: auto;
-            border: 1px solid black;
-            content-visibility: auto;
-            margin-top: 20px;
+        body {
+            font-family: monospace;
+            padding: 20px;
         }
 
-        .child {
-            width: 100%;
-            height: 20px;
-            background: lightgray;
-            margin: 1px 0;
+        button {
+            margin: 10px 0;
+            padding: 10px;
         }
 
-        canvas {
-            max-width: 600px;
+        pre {
+            background: #f4f4f4;
+            padding: 10px;
+            max-height: 300px;
+            overflow-y: auto;
         }
     </style>
 </head>
 
 <body>
-    <button onclick="startStressTest()">Start UaF Stress Test</button>
-    <div>
-        <canvas id="fpsChart"></canvas>
-        <canvas id="timeChart"></canvas>
-        <canvas id="memChart"></canvas>
-    </div>
-    <div id="container"></div>
 
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <h1>Canvas UAF Detection</h1>
+    <button id="testBtn">Run Test</button>
+    <div id="status">Status: Idle</div>
+    <pre id="log"></pre>
+
+    <canvas id="canvas" width="512" height="512" style="display:none;"></canvas>
+
     <script>
-        let fpsChart, timeChart, memChart;
-        let fpsData = [], timeData = [], memData = [];
-        let lastFrameTime = performance.now();
-        let iteration = 0;
-        const maxIterations = 500;
+        const logEl = document.getElementById('log');
+        const statusEl = document.getElementById('status');
 
-        function setupCharts() {
-            fpsChart = new Chart(document.getElementById('fpsChart'), {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'FPS',
-                        data: [],
-                        borderColor: 'blue',
-                        fill: false
-                    }]
-                },
-                options: { scales: { x: { display: false } } }
-            });
+        const engineDiv = document.createElement('div');
+        engineDiv.textContent = navigator.userAgent;
+        document.body.appendChild(engineDiv);
 
-            timeChart = new Chart(document.getElementById('timeChart'), {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Tempo Iteração (ms)',
-                        data: [],
-                        borderColor: 'green',
-                        fill: false
-                    }]
-                },
-                options: { scales: { x: { display: false } } }
-            });
-
-            memChart = new Chart(document.getElementById('memChart'), {
-                type: 'line',
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Memória JS (MB)',
-                        data: [],
-                        borderColor: 'red',
-                        fill: false
-                    }]
-                },
-                options: { scales: { x: { display: false } } }
-            });
+        function log(msg) {
+            logEl.textContent += msg + '\n';
         }
 
-        function updateCharts(fps, iterTime, memMB) {
-            const maxPoints = 100;
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
 
-            fpsData.push(fps);
-            timeData.push(iterTime);
-            memData.push(memMB);
-
-            if (fpsData.length > maxPoints) fpsData.shift();
-            if (timeData.length > maxPoints) timeData.shift();
-            if (memData.length > maxPoints) memData.shift();
-
-            fpsChart.data.labels = fpsData.map((_, i) => i);
-            timeChart.data.labels = timeData.map((_, i) => i);
-            memChart.data.labels = memData.map((_, i) => i);
-
-            fpsChart.data.datasets[0].data = fpsData;
-            timeChart.data.datasets[0].data = timeData;
-            memChart.data.datasets[0].data = memData;
-
-            fpsChart.update();
-            timeChart.update();
-            memChart.update();
+        function markImageData(imgData, pattern = 0x41) {
+            const buf = new Uint8Array(imgData.data.buffer);
+            buf.fill(pattern);
         }
 
-        function startStressTest() {
-            const container = document.getElementById('container');
-            setupCharts();
+        function diffImageData(original, current) {
+            const orig = new Uint8Array(original.data.buffer);
+            const curr = new Uint8Array(current.data.buffer);
+            let start = -1, end = -1, changes = [];
 
-            function mutateDOM() {
-                const start = performance.now();
-
-                for (let i = 0; i < 500; i++) {
-                    const el = document.createElement('div');
-                    el.className = 'child';
-                    el.textContent = 'Element ' + iteration + '-' + i;
-
-                    el.style.contentVisibility = (i % 2 === 0) ? 'auto' : 'visible';
-                    el.style.overflow = (i % 3 === 0) ? 'hidden' : 'auto';
-                    el.style.contain = (i % 4 === 0) ? 'paint' : 'none';
-
-                    container.appendChild(el);
-
-                    const h = el.offsetHeight;
-                    el.style.height = (h + 1) + 'px';
-
-                    if (i % 5 === 0) {
-                        container.removeChild(el);
-                    }
-                }
-
-                if (iteration % 10 === 0) {
-                    container.innerHTML = '';
-                }
-
-                let garbage = [];
-                for (let j = 0; j < 10000; j++) {
-                    garbage.push({ x: Math.random(), y: Math.random(), z: new Array(100).fill(0) });
-                }
-                garbage = null;
-
-                container.scrollTop = container.scrollHeight;
-
-                const now = performance.now();
-                const iterTime = now - start;
-
-                // FPS estimado
-                const delta = now - lastFrameTime;
-                const fps = 1000 / delta;
-                lastFrameTime = now;
-
-                // Memória JS estimada
-                let memMB = 0;
-                if (performance.memory) {
-                    memMB = (performance.memory.usedJSHeapSize / 1048576).toFixed(2);
-                }
-
-                updateCharts(fps, iterTime, memMB);
-
-                iteration++;
-
-                if (iteration < maxIterations) {
-                    requestAnimationFrame(mutateDOM);
-                } else {
-                    console.log('Stress test completed');
+            for (let i = 0; i < orig.length; i++) {
+                if (orig[i] !== curr[i]) {
+                    if (start === -1) start = i;
+                    end = i;
+                    changes.push({ offset: i, from: orig[i], to: curr[i] });
                 }
             }
 
-            mutateDOM();
+            return { changed: changes.length > 0, changes, start, end };
         }
+
+        function drawStress() {
+            ctx.fillStyle = `rgb(${Math.random() * 255},${Math.random() * 255},${Math.random() * 255})`;
+            ctx.fillRect(0, 0, 512, 512);
+        }
+
+        async function stressGC(iter = 500) {
+            for (let i = 0; i < iter; i++) {
+                new ArrayBuffer(1024 * 1024);
+            }
+        }
+
+        async function runTest() {
+            logEl.textContent = '';
+
+            for (let i = 0; i < 100; i++) {
+                statusEl.textContent = 'Status: Running attempt ' + i + "...";
+                //statusEl.textContent = 'Status: Running...';
+
+                const imgData = ctx.createImageData(512, 512);
+                markImageData(imgData, 0x41);  // Fill with 'A' pattern
+
+                // Do some stress drawing
+                const drawInterval = setInterval(drawStress, 1);
+
+                // Wait a bit
+                await new Promise(r => setTimeout(r, 100));
+
+                clearInterval(drawInterval);
+
+                // Check for corruption
+                const currentData = ctx.getImageData(0, 0, 512, 512);
+
+                const diff = diffImageData(imgData, currentData);
+
+                if (diff.changed) {
+                    statusEl.textContent = 'Status: UAF Detected!';
+                    log('[+] UAF Detected!');
+                    log(`Changed bytes: ${diff.changes.length}`);
+                    log(`Affected range: ${diff.start} - ${diff.end}`);
+
+                    // Example: show first 5 changes
+                    diff.changes.slice(0, 5).forEach(c => {
+                        log(`Offset ${c.offset}: 0x${c.from.toString(16)} → 0x${c.to.toString(16)}`);
+                    });
+                } else {
+                    log('[-] No UAF detected. Trying after GC...');
+                    await stressGC();
+
+                    const postGCData = ctx.getImageData(0, 0, 512, 512);
+                    const diffGC = diffImageData(imgData, postGCData);
+
+                    if (diffGC.changed) {
+                        statusEl.textContent = 'Status: UAF Detected after GC!';
+                        log('[+] UAF Detected after GC!');
+                        log(`Changed bytes: ${diffGC.changes.length}`);
+                        log(`Affected range: ${diffGC.start} - ${diffGC.end}`);
+
+                        diffGC.changes.slice(0, 5).forEach(c => {
+                            log(`Offset ${c.offset}: 0x${c.from.toString(16)} → 0x${c.to.toString(16)}`);
+                        });
+                    } else {
+                        statusEl.textContent = 'Status: No UAF Detected';
+                        log('[-] No UAF detected even after GC.');
+                    }
+                }
+            }
+
+
+        }
+
+        document.getElementById('testBtn').addEventListener('click', runTest);
     </script>
+
 </body>
 
 </html>
